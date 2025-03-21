@@ -7,7 +7,6 @@ from openai import OpenAI
 
 load_dotenv()  # Charge les variables d'environnement depuis un fichier .env
 
-
 SLACK_APP_TOKEN = os.getenv("SLACK_APP_TOKEN")
 SLACK_BOT_TOKEN = os.getenv("SLACK_BOT_TOKEN")
 
@@ -25,10 +24,24 @@ def handle_app_mention_events(body, say, logger):
     """
     logger.info(body)
 
+    print (body['event']['channel'], body['event']['ts'])
+
+    # Add thinking reaction
+    app.client.reactions_add(
+        channel=body['event']['channel'],
+        timestamp=body['event']['ts'],
+        name="thought_balloon"
+    )
+
     message_text = extract_message_text(body)
+    
+    # Check if the message is in a thread
+    if 'thread_ts' in body['event']:
+        # Get previous messages from thread
+        thread_messages = get_thread_messages(body['event']['channel'], body['event']['thread_ts'])
+        message_text = f"Previous messages: \n{thread_messages}\nUser message: {message_text}"
 
     print (message_text)
-
 
     completion = client.chat.completions.create(
         model="Jean-Cloud",
@@ -41,10 +54,14 @@ def handle_app_mention_events(body, say, logger):
     )
 
     res_clean_list = completion.choices[0].message.content.split("\n\n **Model:**")[:-1]
-
-    print (res_clean_list)
     res_clean = "".join(res_clean_list)
-    print (res_clean)
+
+    # Remove thinking reaction
+    app.client.reactions_remove(
+        channel=body['event']['channel'],
+        timestamp=body['event']['ts'],
+        name="thought_balloon"
+    )
 
     say(text=res_clean, thread_ts=body['event']['ts'])
 
@@ -61,6 +78,30 @@ def extract_message_text(slack_payload):
     
     return clean_text.strip()
 
+def get_thread_messages(channel_id, thread_ts):
+    """
+    Retrieve all messages from a thread except the last one (which is the mention)
+    """
+    try:
+        result = app.client.conversations_replies(
+            channel=channel_id,
+            ts=thread_ts
+        )
+        
+        # Get all messages except the last one (which contains the mention)
+        messages = result["messages"][:-1]
+        
+        # Format messages
+        formatted_messages = []
+        for msg in messages:
+            user_info = app.client.users_info(user=msg.get("user", "unknown"))
+            username = user_info["user"]["real_name"] if "user" in user_info else "Unknown User"
+            formatted_messages.append(f"{username}: {msg.get('text', '')}")
+            
+        return "\n".join(formatted_messages)
+    except Exception as e:
+        print(f"Error fetching thread messages: {e}")
+        return ""
 
 # Start your app
 if __name__ == "__main__":
